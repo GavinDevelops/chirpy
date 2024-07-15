@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 )
 
 type apiConfig struct {
@@ -41,7 +42,7 @@ func validateChirp(resp http.ResponseWriter, req *http.Request) {
 		Body string `json:"body"`
 	}
 	type reqValid struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	decoder := json.NewDecoder(req.Body)
@@ -54,8 +55,25 @@ func validateChirp(resp http.ResponseWriter, req *http.Request) {
 	const maxChirpLen = 140
 	if len(params.Body) >= maxChirpLen {
 		respondWithError(resp, http.StatusBadRequest, "Chirp is too long")
+		return
 	}
-	respondWithJson(resp, http.StatusOK, reqValid{Valid: true})
+	respondWithJson(resp, http.StatusOK, reqValid{CleanedBody: cleanMessage(params.Body)})
+}
+
+func cleanMessage(msg string) string {
+	badWords := map[string]bool{"kerfuffle": true, "sharbert": true, "fornax": true}
+	replacement := "****"
+	splitMsg := strings.Split(msg, " ")
+	cleanedMessages := make([]string, 0)
+	for _, msg := range splitMsg {
+		if badWords[strings.ToLower(msg)] {
+			cleanedMessages = append(cleanedMessages, replacement)
+			continue
+		}
+		cleanedMessages = append(cleanedMessages, msg)
+	}
+	joined := strings.Join(cleanedMessages, " ")
+	return joined
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
