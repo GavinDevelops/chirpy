@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/GavinDevelops/chirpy/database"
 )
 
 type apiConfig struct {
 	fileserverHits int
+}
+
+type dbWrapper struct {
+	db *database.DB
 }
 
 func (cft *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -37,7 +44,50 @@ func (cft *apiConfig) resetMetrics(resp http.ResponseWriter, req *http.Request) 
 	resp.Write([]byte("Hits reset to 0"))
 }
 
-func validateChirp(resp http.ResponseWriter, req *http.Request) {
+func (dbw dbWrapper) createUser(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email string `json:"email"`
+	}
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
+		return
+	}
+	user, createErr := dbw.db.CreateUser(params.Email)
+	if createErr != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error creating user")
+		return
+	}
+	respondWithJson(w, http.StatusCreated, user)
+}
+
+func (dbw dbWrapper) getChirp(w http.ResponseWriter, req *http.Request) {
+	id, parseErr := strconv.Atoi(req.PathValue("chirpid"))
+	if parseErr != nil {
+		respondWithError(w, http.StatusBadRequest, "Error parsing path param")
+		return
+	}
+	chirp, err := dbw.db.GetChirp(id)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	respondWithJson(w, http.StatusOK, chirp)
+
+}
+
+func (dbw dbWrapper) getChirps(w http.ResponseWriter, req *http.Request) {
+	chirps, err := dbw.db.GetChirps()
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't get chirps")
+		return
+	}
+	respondWithJson(w, http.StatusOK, chirps)
+}
+
+func (dbw dbWrapper) validateChirp(resp http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -57,7 +107,12 @@ func validateChirp(resp http.ResponseWriter, req *http.Request) {
 		respondWithError(resp, http.StatusBadRequest, "Chirp is too long")
 		return
 	}
-	respondWithJson(resp, http.StatusOK, reqValid{CleanedBody: cleanMessage(params.Body)})
+	chirp, createErr := dbw.db.CreateChirp(params.Body)
+	if createErr != nil {
+		respondWithError(resp, http.StatusBadRequest, "Couldn't create chirp")
+		return
+	}
+	respondWithJson(resp, http.StatusCreated, chirp)
 }
 
 func cleanMessage(msg string) string {
@@ -103,6 +158,11 @@ func main() {
 	const port = "8080"
 
 	config := apiConfig{fileserverHits: 0}
+	db, err := database.NewDB("./database.json")
+	if err != nil {
+		log.Fatalf("Error starting database: %s", err)
+	}
+	dbw := dbWrapper{db: db}
 
 	mux := http.NewServeMux()
 	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
@@ -110,7 +170,10 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", config.getMetrics)
 	mux.HandleFunc("GET /api/reset", config.resetMetrics)
 	mux.HandleFunc("GET /api/healthz", healthz)
-	mux.HandleFunc("POST /api/validate_chirp", validateChirp)
+	mux.HandleFunc("POST /api/chirps", dbw.validateChirp)
+	mux.HandleFunc("GET /api/chirps", dbw.getChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpid}", dbw.getChirp)
+	mux.HandleFunc("POST /api/users", dbw.createUser)
 
 	server := &http.Server{
 		Handler: mux,
