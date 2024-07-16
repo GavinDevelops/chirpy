@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"sync"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type DB struct {
@@ -18,9 +20,15 @@ type DBStructure struct {
 	Users  map[int]User  `json:"users"`
 }
 
-type User struct {
+type UserReturn struct {
 	Id    int    `json:"id"`
 	Email string `json:"email"`
+}
+
+type User struct {
+	Id       int    `json:"id"`
+	Email    string `json:"email"`
+	Password []byte `json:"password"`
 }
 
 type Chirp struct {
@@ -75,18 +83,62 @@ func (db *DB) GetChirp(id int) (Chirp, error) {
 	return Chirp{}, errors.New(fmt.Sprintf("Error getting chirp with id: %v", id))
 }
 
-func (db *DB) CreateUser(email string) (User, error) {
+func (db *DB) CreateUser(email string, password string) (UserReturn, error) {
 	loadedDb, loadErr := db.loadDB()
 	if loadErr != nil {
-		return User{}, loadErr
+		return UserReturn{}, loadErr
+	}
+	_, userExists, userErr := db.doesEmailExist(email)
+	if userErr != nil {
+		return UserReturn{}, userErr
+	}
+	if userExists {
+		return UserReturn{}, errors.New("User already exists")
 	}
 	offByOne := len(loadedDb.Users) + 1
-	loadedDb.Users[offByOne] = User{Id: offByOne, Email: email}
+	hashedPassword, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if hashErr != nil {
+		return UserReturn{}, hashErr
+	}
+	loadedDb.Users[offByOne] = User{
+		Id:       offByOne,
+		Email:    email,
+		Password: hashedPassword,
+	}
 	writeErr := db.writeDB(loadedDb)
 	if writeErr != nil {
-		return User{}, writeErr
+		return UserReturn{}, writeErr
 	}
-	return loadedDb.Users[offByOne], nil
+	return UserReturn{Email: email, Id: offByOne}, nil
+}
+
+func (db *DB) VerifyUser(email, password string) (UserReturn, error) {
+	user, userExists, err := db.doesEmailExist(email)
+	if err != nil {
+		return UserReturn{}, err
+	}
+	if !userExists {
+		return UserReturn{}, errors.New("User does not exist")
+	}
+	compareErr := bcrypt.CompareHashAndPassword(user.Password, []byte(password))
+	if compareErr != nil {
+		return UserReturn{}, errors.New("Invalid password")
+	}
+	return UserReturn{Id: user.Id, Email: user.Email}, nil
+
+}
+
+func (db *DB) doesEmailExist(email string) (User, bool, error) {
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return User{}, false, loadErr
+	}
+	for _, user := range loadedDb.Users {
+		if user.Email == email {
+			return user, true, nil
+		}
+	}
+	return User{}, false, nil
 }
 
 func (db *DB) ensureDB() error {

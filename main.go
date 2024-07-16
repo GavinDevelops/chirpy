@@ -46,7 +46,8 @@ func (cft *apiConfig) resetMetrics(resp http.ResponseWriter, req *http.Request) 
 
 func (dbw dbWrapper) createUser(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
@@ -55,12 +56,32 @@ func (dbw dbWrapper) createUser(w http.ResponseWriter, req *http.Request) {
 		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
 		return
 	}
-	user, createErr := dbw.db.CreateUser(params.Email)
+	user, createErr := dbw.db.CreateUser(params.Email, params.Password)
 	if createErr != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error creating user")
 		return
 	}
 	respondWithJson(w, http.StatusCreated, user)
+}
+
+func (dbw dbWrapper) getUser(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
+		return
+	}
+	user, verifyErr := dbw.db.VerifyUser(params.Email, params.Password)
+	if verifyErr != nil {
+		respondWithError(w, http.StatusUnauthorized, "Invalid password")
+		return
+	}
+	respondWithJson(w, http.StatusOK, user)
 }
 
 func (dbw dbWrapper) getChirp(w http.ResponseWriter, req *http.Request) {
@@ -174,6 +195,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", dbw.getChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpid}", dbw.getChirp)
 	mux.HandleFunc("POST /api/users", dbw.createUser)
+	mux.HandleFunc("POST /api/login", dbw.getUser)
 
 	server := &http.Server{
 		Handler: mux,
