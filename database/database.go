@@ -31,12 +31,14 @@ type UserReturn struct {
 	Email        string  `json:"email"`
 	Token        *string `json:"token"`
 	RefreshToken string  `json:"refresh_token"`
+	IsChirpyRed  bool    `json:"is_chirpy_red"`
 }
 
 type User struct {
-	Id       int    `json:"id"`
-	Email    string `json:"email"`
-	Password []byte `json:"password"`
+	Id          int    `json:"id"`
+	Email       string `json:"email"`
+	Password    []byte `json:"password"`
+	IsChirpyRed bool   `json:"is_chirpy_red"`
 }
 
 type RefreshToken struct {
@@ -137,15 +139,31 @@ func (db *DB) CreateUser(email string, password string) (UserReturn, error) {
 		return UserReturn{}, hashErr
 	}
 	loadedDb.Users[offByOne] = User{
-		Id:       offByOne,
-		Email:    email,
-		Password: hashedPassword,
+		Id:          offByOne,
+		Email:       email,
+		Password:    hashedPassword,
+		IsChirpyRed: false,
 	}
 	writeErr := db.writeDB(loadedDb)
 	if writeErr != nil {
 		return UserReturn{}, writeErr
 	}
-	return UserReturn{Email: email, Id: offByOne}, nil
+	return UserReturn{Email: email, Id: offByOne, IsChirpyRed: false}, nil
+}
+
+func (db *DB) UpgradeUser(userId int) error {
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return loadErr
+	}
+	user, exists := loadedDb.Users[userId]
+	if !exists {
+		return errors.New("User does not exist")
+	}
+	user.IsChirpyRed = true
+	loadedDb.Users[userId] = user
+	db.writeDB(loadedDb)
+	return nil
 }
 
 func (db *DB) VerifyUser(email, password, jwtSecret string, expiresInSeconds int) (UserReturn, error) {
@@ -173,6 +191,7 @@ func (db *DB) VerifyUser(email, password, jwtSecret string, expiresInSeconds int
 		Email:        user.Email,
 		Token:        &signedToken,
 		RefreshToken: refreshToken.Token,
+		IsChirpyRed:  user.IsChirpyRed,
 	}, nil
 }
 

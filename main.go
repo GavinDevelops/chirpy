@@ -266,6 +266,23 @@ func (cft *apiConfig) polkaWebhook(w http.ResponseWriter, req *http.Request) {
 			UserID int `json:"user_id"`
 		} `json:"data"`
 	}
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
+	}
+	if params.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	upgradeErr := cft.db.UpgradeUser(params.Data.UserID)
+	if upgradeErr != nil {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func cleanMessage(msg string) string {
