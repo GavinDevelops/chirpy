@@ -1,6 +1,8 @@
 package database
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,20 +21,27 @@ type DB struct {
 }
 
 type DBStructure struct {
-	Chirps map[int]Chirp `json:"chirps"`
-	Users  map[int]User  `json:"users"`
+	Chirps        map[int]Chirp        `json:"chirps"`
+	Users         map[int]User         `json:"users"`
+	RefreshTokens map[int]RefreshToken `json:"refresh_token"`
 }
 
 type UserReturn struct {
-	Id    int     `json:"id"`
-	Email string  `json:"email"`
-	Token *string `json:"token"`
+	Id           int     `json:"id"`
+	Email        string  `json:"email"`
+	Token        *string `json:"token"`
+	RefreshToken string  `json:"refresh_token"`
 }
 
 type User struct {
 	Id       int    `json:"id"`
 	Email    string `json:"email"`
 	Password []byte `json:"password"`
+}
+
+type RefreshToken struct {
+	Token string    `json:"refresh_token"`
+	Exp   time.Time `json:"expiration"`
 }
 
 type Chirp struct {
@@ -128,7 +137,24 @@ func (db *DB) VerifyUser(email, password, jwtSecret string, expiresInSeconds int
 	if compareErr != nil {
 		return UserReturn{}, compareErr
 	}
-	d, _ := time.ParseDuration("24h")
+	signedToken, signingErr := getSignedToken(user.Id, expiresInSeconds, jwtSecret)
+	if signingErr != nil {
+		return UserReturn{}, signingErr
+	}
+	refreshToken, refreshTokenErr := db.getValidOrNewRefreshToken(user.Id)
+	if refreshTokenErr != nil {
+		return UserReturn{}, refreshTokenErr
+	}
+	return UserReturn{
+		Id:           user.Id,
+		Email:        user.Email,
+		Token:        &signedToken,
+		RefreshToken: refreshToken.Token,
+	}, nil
+}
+
+func getSignedToken(id, expiresInSeconds int, jwtSecret string) (string, error) {
+	d, _ := time.ParseDuration("1h")
 	if d.Abs().Seconds() > float64(expiresInSeconds) && expiresInSeconds != 0 {
 		d = time.Duration(time.Second * time.Duration(expiresInSeconds))
 	}
@@ -138,14 +164,55 @@ func (db *DB) VerifyUser(email, password, jwtSecret string, expiresInSeconds int
 			Issuer:    "chirpy",
 			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(d)),
-			Subject:   strconv.Itoa(user.Id),
+			Subject:   strconv.Itoa(id),
 		},
 	)
 	signedToken, signingErr := jwtToken.SignedString([]byte(jwtSecret))
 	if signingErr != nil {
-		return UserReturn{}, signingErr
+		return "", signingErr
 	}
-	return UserReturn{Id: user.Id, Email: user.Email, Token: &signedToken}, nil
+	return signedToken, nil
+}
+
+func (db *DB) getValidOrNewRefreshToken(userId int) (RefreshToken, error) {
+	token, tokenIsValid, validErr := db.getValidRefreshToken(userId)
+	if validErr != nil {
+		return RefreshToken{}, validErr
+	}
+	if !tokenIsValid {
+		return db.createNewRefreshToken(userId)
+	}
+	return token, nil
+}
+
+func (db *DB) getValidRefreshToken(userId int) (RefreshToken, bool, error) {
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return RefreshToken{}, false, loadErr
+	}
+	refreshToken, refreshTokenExists := loadedDb.RefreshTokens[userId]
+	if refreshTokenExists && refreshToken.Exp.Sub(time.Now()) > 0 {
+		return refreshToken, refreshTokenExists, nil
+	}
+	return RefreshToken{}, false, loadErr
+}
+
+func (db *DB) createNewRefreshToken(userId int) (RefreshToken, error) {
+	randBytes := make([]byte, 32)
+	_, readErr := rand.Read(randBytes)
+	if readErr != nil {
+		return RefreshToken{}, readErr
+	}
+	token := hex.EncodeToString(randBytes)
+	expiration := time.Now().Add(time.Hour * 24 * 60)
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return RefreshToken{}, loadErr
+	}
+	refreshToken := RefreshToken{Token: token, Exp: expiration}
+	loadedDb.RefreshTokens[userId] = refreshToken
+	db.writeDB(loadedDb)
+	return refreshToken, nil
 }
 
 func (db *DB) UpdateUser(id, email, password string) (UserReturn, error) {
@@ -183,7 +250,7 @@ func (db *DB) ensureDB() error {
 	_, err := os.ReadFile(db.path)
 	if err != nil {
 		fmt.Println("Creating db")
-		db.writeDB(DBStructure{Chirps: make(map[int]Chirp), Users: make(map[int]User)})
+		db.writeDB(DBStructure{Chirps: make(map[int]Chirp), Users: make(map[int]User), RefreshTokens: make(map[int]RefreshToken)})
 	}
 	return nil
 }
