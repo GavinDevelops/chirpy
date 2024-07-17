@@ -78,6 +78,24 @@ func (db *DB) CreateChirp(body, authorId string) (Chirp, error) {
 	return loadedDb.Chirps[offByOne], nil
 }
 
+func (db *DB) DeleteChirp(chirpId int, id string) error {
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return loadErr
+	}
+	userId, convErr := strconv.Atoi(id)
+	if convErr != nil {
+		return convErr
+	}
+	chirpToDelete := loadedDb.Chirps[chirpId]
+	if chirpToDelete.AuthorId != userId {
+		return errors.New("Not author of chirp")
+	}
+	delete(loadedDb.Chirps, chirpId)
+	db.writeDB(loadedDb)
+	return nil
+}
+
 func (db *DB) GetChirps() ([]Chirp, error) {
 	loadedDb, loadErr := db.loadDB()
 	if loadErr != nil {

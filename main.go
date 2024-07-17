@@ -200,6 +200,40 @@ func (cft *apiConfig) validateChirp(w http.ResponseWriter, req *http.Request) {
 	respondWithJson(w, http.StatusCreated, chirp)
 }
 
+func (cft *apiConfig) deleteChirp(w http.ResponseWriter, req *http.Request) {
+	token := req.Header.Get("Authorization")
+	token = strings.TrimPrefix(token, "Bearer ")
+	chirpId, parseErr := strconv.Atoi(req.PathValue("chirpid"))
+	if parseErr != nil {
+		respondWithError(w, http.StatusBadRequest, "Error parsing chirpId")
+	}
+	jwtToken, err := jwt.ParseWithClaims(
+		token,
+		&jwt.RegisteredClaims{},
+		func(token *jwt.Token) (
+			interface{},
+			error,
+		) {
+			return []byte(cft.jwtSecret), nil
+		},
+	)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	userId, idErr := jwtToken.Claims.GetSubject()
+	if idErr != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting id from subjet")
+		return
+	}
+	deleteErr := cft.db.DeleteChirp(chirpId, userId)
+	if deleteErr != nil {
+		respondWithError(w, http.StatusForbidden, deleteErr.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (cft *apiConfig) refreshToken(w http.ResponseWriter, req *http.Request) {
 	refreshToken := req.Header.Get("Authorization")
 	refreshToken = strings.TrimPrefix(refreshToken, "Bearer ")
@@ -223,6 +257,15 @@ func (cft *apiConfig) revokeToken(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (cft *apiConfig) polkaWebhook(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID int `json:"user_id"`
+		} `json:"data"`
+	}
 }
 
 func cleanMessage(msg string) string {
@@ -289,6 +332,8 @@ func main() {
 	mux.HandleFunc("PUT /api/users", config.updateUser)
 	mux.HandleFunc("POST /api/refresh", config.refreshToken)
 	mux.HandleFunc("POST /api/revoke", config.revokeToken)
+	mux.HandleFunc("DELETE /api/chirps/{chirpid}", config.deleteChirp)
+	mux.HandleFunc("POST /api/polka/webhooks", config.polkaWebhook)
 
 	server := &http.Server{
 		Handler: mux,
