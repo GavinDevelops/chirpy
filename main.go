@@ -179,6 +179,19 @@ func (cft *apiConfig) validateChirp(resp http.ResponseWriter, req *http.Request)
 	respondWithJson(resp, http.StatusCreated, chirp)
 }
 
+func (cft *apiConfig) refreshToken(w http.ResponseWriter, req *http.Request) {
+	refreshToken := req.Header.Get("Authorization")
+	refreshToken = strings.TrimPrefix(refreshToken, "Bearer ")
+	token, newTokenErr := cft.db.GetNewTokenFromRefreshToken(refreshToken, cft.jwtSecret)
+	if newTokenErr != nil {
+		respondWithError(w, http.StatusUnauthorized, newTokenErr.Error())
+	}
+	type responseStruct struct {
+		Token string `json:"token"`
+	}
+	respondWithJson(w, http.StatusOK, responseStruct{Token: token})
+}
+
 func cleanMessage(msg string) string {
 	badWords := map[string]bool{"kerfuffle": true, "sharbert": true, "fornax": true}
 	replacement := "****"
@@ -241,6 +254,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", config.createUser)
 	mux.HandleFunc("POST /api/login", config.getUser)
 	mux.HandleFunc("PUT /api/users", config.updateUser)
+	mux.HandleFunc("POST /api/refresh", config.refreshToken)
 
 	server := &http.Server{
 		Handler: mux,

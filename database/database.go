@@ -174,6 +174,19 @@ func getSignedToken(id, expiresInSeconds int, jwtSecret string) (string, error) 
 	return signedToken, nil
 }
 
+func (db *DB) GetNewTokenFromRefreshToken(refreshToken, jwtSecret string) (string, error) {
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return "", loadErr
+	}
+	for id, token := range loadedDb.RefreshTokens {
+		if token.Token == refreshToken && token.Exp.Sub(time.Now()) > 0 {
+			return getSignedToken(id, 0, jwtSecret)
+		}
+	}
+	return "", errors.New("Invalid refresh token")
+}
+
 func (db *DB) getValidOrNewRefreshToken(userId int) (RefreshToken, error) {
 	token, tokenIsValid, validErr := db.getValidRefreshToken(userId)
 	if validErr != nil {
