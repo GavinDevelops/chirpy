@@ -151,7 +151,7 @@ func (cft *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
 	respondWithJson(w, http.StatusOK, chirps)
 }
 
-func (cft *apiConfig) validateChirp(resp http.ResponseWriter, req *http.Request) {
+func (cft *apiConfig) validateChirp(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -163,20 +163,41 @@ func (cft *apiConfig) validateChirp(resp http.ResponseWriter, req *http.Request)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		respondWithError(resp, http.StatusInternalServerError, "Couldn't decode parameters")
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
+	}
+	token := req.Header.Get("Authorization")
+	token = strings.TrimPrefix(token, "Bearer ")
+	jwtToken, err := jwt.ParseWithClaims(
+		token,
+		&jwt.RegisteredClaims{},
+		func(token *jwt.Token) (
+			interface{},
+			error,
+		) {
+			return []byte(cft.jwtSecret), nil
+		},
+	)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	id, idErr := jwtToken.Claims.GetSubject()
+	if idErr != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting id from subjet")
 		return
 	}
 	const maxChirpLen = 140
 	if len(params.Body) >= maxChirpLen {
-		respondWithError(resp, http.StatusBadRequest, "Chirp is too long")
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
 		return
 	}
-	chirp, createErr := cft.db.CreateChirp(params.Body)
+	chirp, createErr := cft.db.CreateChirp(params.Body, id)
 	if createErr != nil {
-		respondWithError(resp, http.StatusBadRequest, "Couldn't create chirp")
+		respondWithError(w, http.StatusBadRequest, "Couldn't create chirp")
 		return
 	}
-	respondWithJson(resp, http.StatusCreated, chirp)
+	respondWithJson(w, http.StatusCreated, chirp)
 }
 
 func (cft *apiConfig) refreshToken(w http.ResponseWriter, req *http.Request) {
@@ -185,11 +206,23 @@ func (cft *apiConfig) refreshToken(w http.ResponseWriter, req *http.Request) {
 	token, newTokenErr := cft.db.GetNewTokenFromRefreshToken(refreshToken, cft.jwtSecret)
 	if newTokenErr != nil {
 		respondWithError(w, http.StatusUnauthorized, newTokenErr.Error())
+		return
 	}
 	type responseStruct struct {
 		Token string `json:"token"`
 	}
 	respondWithJson(w, http.StatusOK, responseStruct{Token: token})
+}
+
+func (cft *apiConfig) revokeToken(w http.ResponseWriter, req *http.Request) {
+	refreshToken := req.Header.Get("Authorization")
+	refreshToken = strings.TrimPrefix(refreshToken, "Bearer ")
+	removeErr := cft.db.RemoveRefreshToken(refreshToken)
+	if removeErr != nil {
+		respondWithError(w, http.StatusInternalServerError, removeErr.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func cleanMessage(msg string) string {
@@ -255,6 +288,7 @@ func main() {
 	mux.HandleFunc("POST /api/login", config.getUser)
 	mux.HandleFunc("PUT /api/users", config.updateUser)
 	mux.HandleFunc("POST /api/refresh", config.refreshToken)
+	mux.HandleFunc("POST /api/revoke", config.revokeToken)
 
 	server := &http.Server{
 		Handler: mux,

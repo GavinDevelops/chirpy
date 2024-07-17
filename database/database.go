@@ -45,8 +45,9 @@ type RefreshToken struct {
 }
 
 type Chirp struct {
-	Id   int    `json:"id"`
-	Body string `json:"body"`
+	Id       int    `json:"id"`
+	Body     string `json:"body"`
+	AuthorId int    `json:"author_id"`
 }
 
 func NewDB(path string) (*DB, error) {
@@ -59,13 +60,17 @@ func NewDB(path string) (*DB, error) {
 	return &db, nil
 }
 
-func (db *DB) CreateChirp(body string) (Chirp, error) {
+func (db *DB) CreateChirp(body, authorId string) (Chirp, error) {
 	loadedDb, err := db.loadDB()
 	if err != nil {
 		return Chirp{}, err
 	}
+	userId, convErr := strconv.Atoi(authorId)
+	if convErr != nil {
+		return Chirp{}, convErr
+	}
 	offByOne := len(loadedDb.Chirps) + 1
-	loadedDb.Chirps[offByOne] = Chirp{Id: offByOne, Body: body}
+	loadedDb.Chirps[offByOne] = Chirp{Id: offByOne, Body: body, AuthorId: userId}
 	writeErr := db.writeDB(loadedDb)
 	if writeErr != nil {
 		return Chirp{}, writeErr
@@ -185,6 +190,21 @@ func (db *DB) GetNewTokenFromRefreshToken(refreshToken, jwtSecret string) (strin
 		}
 	}
 	return "", errors.New("Invalid refresh token")
+}
+
+func (db *DB) RemoveRefreshToken(refreshToken string) error {
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return loadErr
+	}
+	for id, token := range loadedDb.RefreshTokens {
+		if token.Token == refreshToken {
+			delete(loadedDb.RefreshTokens, id)
+			db.writeDB(loadedDb)
+			return nil
+		}
+	}
+	return nil
 }
 
 func (db *DB) getValidOrNewRefreshToken(userId int) (RefreshToken, error) {
