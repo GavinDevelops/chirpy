@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -21,8 +24,9 @@ type DBStructure struct {
 }
 
 type UserReturn struct {
-	Id    int    `json:"id"`
-	Email string `json:"email"`
+	Id    int     `json:"id"`
+	Email string  `json:"email"`
+	Token *string `json:"token"`
 }
 
 type User struct {
@@ -112,7 +116,7 @@ func (db *DB) CreateUser(email string, password string) (UserReturn, error) {
 	return UserReturn{Email: email, Id: offByOne}, nil
 }
 
-func (db *DB) VerifyUser(email, password string) (UserReturn, error) {
+func (db *DB) VerifyUser(email, password, jwtSecret string, expiresInSeconds int) (UserReturn, error) {
 	user, userExists, err := db.doesEmailExist(email)
 	if err != nil {
 		return UserReturn{}, err
@@ -122,10 +126,44 @@ func (db *DB) VerifyUser(email, password string) (UserReturn, error) {
 	}
 	compareErr := bcrypt.CompareHashAndPassword(user.Password, []byte(password))
 	if compareErr != nil {
-		return UserReturn{}, errors.New("Invalid password")
+		return UserReturn{}, compareErr
 	}
-	return UserReturn{Id: user.Id, Email: user.Email}, nil
+	d, _ := time.ParseDuration("24h")
+	if d.Abs().Seconds() > float64(expiresInSeconds) && expiresInSeconds != 0 {
+		d = time.Duration(time.Second * time.Duration(expiresInSeconds))
+	}
+	jwtToken := jwt.NewWithClaims(
+		jwt.SigningMethodHS256,
+		jwt.RegisteredClaims{
+			Issuer:    "chirpy",
+			IssuedAt:  jwt.NewNumericDate(time.Now().UTC()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(d)),
+			Subject:   strconv.Itoa(user.Id),
+		},
+	)
+	signedToken, signingErr := jwtToken.SignedString([]byte(jwtSecret))
+	if signingErr != nil {
+		return UserReturn{}, signingErr
+	}
+	return UserReturn{Id: user.Id, Email: user.Email, Token: &signedToken}, nil
+}
 
+func (db *DB) UpdateUser(id, email, password string) (UserReturn, error) {
+	userId, conversionErr := strconv.Atoi(id)
+	if conversionErr != nil {
+		return UserReturn{}, conversionErr
+	}
+	loadedDb, loadErr := db.loadDB()
+	if loadErr != nil {
+		return UserReturn{}, loadErr
+	}
+	hashedPassword, hashErr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if hashErr != nil {
+		return UserReturn{}, hashErr
+	}
+	loadedDb.Users[userId] = User{Id: userId, Email: email, Password: hashedPassword}
+	db.writeDB(loadedDb)
+	return UserReturn{Email: loadedDb.Users[userId].Email, Id: loadedDb.Users[userId].Id}, nil
 }
 
 func (db *DB) doesEmailExist(email string) (User, bool, error) {

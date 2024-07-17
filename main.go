@@ -5,18 +5,19 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/GavinDevelops/chirpy/database"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
 )
 
 type apiConfig struct {
 	fileserverHits int
-}
-
-type dbWrapper struct {
-	db *database.DB
+	jwtSecret      string
+	db             *database.DB
 }
 
 func (cft *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -44,7 +45,7 @@ func (cft *apiConfig) resetMetrics(resp http.ResponseWriter, req *http.Request) 
 	resp.Write([]byte("Hits reset to 0"))
 }
 
-func (dbw dbWrapper) createUser(w http.ResponseWriter, req *http.Request) {
+func (cft *apiConfig) createUser(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
@@ -56,7 +57,7 @@ func (dbw dbWrapper) createUser(w http.ResponseWriter, req *http.Request) {
 		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
 		return
 	}
-	user, createErr := dbw.db.CreateUser(params.Email, params.Password)
+	user, createErr := cft.db.CreateUser(params.Email, params.Password)
 	if createErr != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error creating user")
 		return
@@ -64,10 +65,11 @@ func (dbw dbWrapper) createUser(w http.ResponseWriter, req *http.Request) {
 	respondWithJson(w, http.StatusCreated, user)
 }
 
-func (dbw dbWrapper) getUser(w http.ResponseWriter, req *http.Request) {
+func (cft *apiConfig) getUser(w http.ResponseWriter, req *http.Request) {
 	type parameters struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
@@ -76,7 +78,7 @@ func (dbw dbWrapper) getUser(w http.ResponseWriter, req *http.Request) {
 		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
 		return
 	}
-	user, verifyErr := dbw.db.VerifyUser(params.Email, params.Password)
+	user, verifyErr := cft.db.VerifyUser(params.Email, params.Password, cft.jwtSecret, params.ExpiresInSeconds)
 	if verifyErr != nil {
 		respondWithError(w, http.StatusUnauthorized, "Invalid password")
 		return
@@ -84,13 +86,54 @@ func (dbw dbWrapper) getUser(w http.ResponseWriter, req *http.Request) {
 	respondWithJson(w, http.StatusOK, user)
 }
 
-func (dbw dbWrapper) getChirp(w http.ResponseWriter, req *http.Request) {
+func (cft *apiConfig) updateUser(w http.ResponseWriter, req *http.Request) {
+	type parameters struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	token := req.Header.Get("Authorization")
+	token = strings.TrimPrefix(token, "Bearer ")
+	jwtToken, err := jwt.ParseWithClaims(
+		token,
+		&jwt.RegisteredClaims{},
+		func(token *jwt.Token) (
+			interface{},
+			error,
+		) {
+			return []byte(cft.jwtSecret), nil
+		},
+	)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	id, idErr := jwtToken.Claims.GetSubject()
+	if idErr != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error getting id from subjet")
+		return
+	}
+	decoder := json.NewDecoder(req.Body)
+	params := parameters{}
+	decodeErr := decoder.Decode(&params)
+	if decodeErr != nil {
+		respondWithError(w, http.StatusBadRequest, "Couldn't decode parameters")
+		return
+	}
+	user, updateUserErr := cft.db.UpdateUser(id, params.Email, params.Password)
+	if updateUserErr != nil {
+		respondWithError(w, http.StatusInternalServerError, updateUserErr.Error())
+		return
+	}
+	respondWithJson(w, http.StatusOK, user)
+}
+
+func (cft *apiConfig) getChirp(w http.ResponseWriter, req *http.Request) {
 	id, parseErr := strconv.Atoi(req.PathValue("chirpid"))
 	if parseErr != nil {
 		respondWithError(w, http.StatusBadRequest, "Error parsing path param")
 		return
 	}
-	chirp, err := dbw.db.GetChirp(id)
+	chirp, err := cft.db.GetChirp(id)
 	if err != nil {
 		respondWithError(w, http.StatusNotFound, err.Error())
 		return
@@ -99,8 +142,8 @@ func (dbw dbWrapper) getChirp(w http.ResponseWriter, req *http.Request) {
 
 }
 
-func (dbw dbWrapper) getChirps(w http.ResponseWriter, req *http.Request) {
-	chirps, err := dbw.db.GetChirps()
+func (cft *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
+	chirps, err := cft.db.GetChirps()
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Couldn't get chirps")
 		return
@@ -108,7 +151,7 @@ func (dbw dbWrapper) getChirps(w http.ResponseWriter, req *http.Request) {
 	respondWithJson(w, http.StatusOK, chirps)
 }
 
-func (dbw dbWrapper) validateChirp(resp http.ResponseWriter, req *http.Request) {
+func (cft *apiConfig) validateChirp(resp http.ResponseWriter, req *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
 	}
@@ -128,7 +171,7 @@ func (dbw dbWrapper) validateChirp(resp http.ResponseWriter, req *http.Request) 
 		respondWithError(resp, http.StatusBadRequest, "Chirp is too long")
 		return
 	}
-	chirp, createErr := dbw.db.CreateChirp(params.Body)
+	chirp, createErr := cft.db.CreateChirp(params.Body)
 	if createErr != nil {
 		respondWithError(resp, http.StatusBadRequest, "Couldn't create chirp")
 		return
@@ -175,15 +218,16 @@ func respondWithJson(w http.ResponseWriter, code int, payload interface{}) {
 }
 
 func main() {
+	godotenv.Load()
+	jwtSecret := os.Getenv("JWT_SECRET")
 	const filepathRoot = "."
 	const port = "8080"
 
-	config := apiConfig{fileserverHits: 0}
 	db, err := database.NewDB("./database.json")
 	if err != nil {
 		log.Fatalf("Error starting database: %s", err)
 	}
-	dbw := dbWrapper{db: db}
+	config := apiConfig{fileserverHits: 0, jwtSecret: jwtSecret, db: db}
 
 	mux := http.NewServeMux()
 	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
@@ -191,11 +235,12 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", config.getMetrics)
 	mux.HandleFunc("GET /api/reset", config.resetMetrics)
 	mux.HandleFunc("GET /api/healthz", healthz)
-	mux.HandleFunc("POST /api/chirps", dbw.validateChirp)
-	mux.HandleFunc("GET /api/chirps", dbw.getChirps)
-	mux.HandleFunc("GET /api/chirps/{chirpid}", dbw.getChirp)
-	mux.HandleFunc("POST /api/users", dbw.createUser)
-	mux.HandleFunc("POST /api/login", dbw.getUser)
+	mux.HandleFunc("POST /api/chirps", config.validateChirp)
+	mux.HandleFunc("GET /api/chirps", config.getChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpid}", config.getChirp)
+	mux.HandleFunc("POST /api/users", config.createUser)
+	mux.HandleFunc("POST /api/login", config.getUser)
+	mux.HandleFunc("PUT /api/users", config.updateUser)
 
 	server := &http.Server{
 		Handler: mux,
