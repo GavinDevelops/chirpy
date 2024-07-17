@@ -17,6 +17,7 @@ import (
 type apiConfig struct {
 	fileserverHits int
 	jwtSecret      string
+	polkaApikey    string
 	db             *database.DB
 }
 
@@ -266,6 +267,12 @@ func (cft *apiConfig) polkaWebhook(w http.ResponseWriter, req *http.Request) {
 			UserID int `json:"user_id"`
 		} `json:"data"`
 	}
+	apiKey := req.Header.Get("Authorization")
+	apiKey = strings.TrimPrefix(apiKey, "ApiKey ")
+	if apiKey != cft.polkaApikey {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
 	decoder := json.NewDecoder(req.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
@@ -326,6 +333,7 @@ func respondWithJson(w http.ResponseWriter, code int, payload interface{}) {
 func main() {
 	godotenv.Load()
 	jwtSecret := os.Getenv("JWT_SECRET")
+	polkaApiKey := os.Getenv("POLKA_API_KEY")
 	const filepathRoot = "."
 	const port = "8080"
 
@@ -333,7 +341,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error starting database: %s", err)
 	}
-	config := apiConfig{fileserverHits: 0, jwtSecret: jwtSecret, db: db}
+	config := apiConfig{fileserverHits: 0, jwtSecret: jwtSecret, db: db, polkaApikey: polkaApiKey}
 
 	mux := http.NewServeMux()
 	fsHandler := http.StripPrefix("/app", http.FileServer(http.Dir(".")))
