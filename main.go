@@ -144,7 +144,9 @@ func (cft *apiConfig) getChirp(w http.ResponseWriter, req *http.Request) {
 }
 
 func (cft *apiConfig) getChirps(w http.ResponseWriter, req *http.Request) {
-	chirps, err := cft.db.GetChirps()
+	authorId := req.URL.Query().Get("author_id")
+	sort := req.URL.Query().Get("sort")
+	chirps, err := cft.db.GetChirps(authorId, sort)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Couldn't get chirps")
 		return

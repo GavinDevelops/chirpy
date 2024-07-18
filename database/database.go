@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -98,16 +99,46 @@ func (db *DB) DeleteChirp(chirpId int, id string) error {
 	return nil
 }
 
-func (db *DB) GetChirps() ([]Chirp, error) {
+func (db *DB) GetChirps(authorId, sortDirection string) ([]Chirp, error) {
 	loadedDb, loadErr := db.loadDB()
 	if loadErr != nil {
 		return []Chirp{}, loadErr
 	}
 	chirps := []Chirp{}
-	for _, chirp := range loadedDb.Chirps {
-		chirps = append(chirps, chirp)
+	if authorId != "" {
+		id, convErr := strconv.Atoi(authorId)
+		if convErr != nil {
+			return chirps, convErr
+		}
+		for _, chirp := range loadedDb.Chirps {
+			if chirp.AuthorId == id {
+				chirps = append(chirps, chirp)
+			}
+		}
+	} else {
+		for _, chirp := range loadedDb.Chirps {
+			chirps = append(chirps, chirp)
+		}
 	}
+	chirps = sortChirps(sortDirection, chirps)
 	return chirps, nil
+}
+
+func sortChirps(direction string, chirps []Chirp) []Chirp {
+	if direction == "" {
+		return chirps
+	}
+	if direction == "asc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].Id < chirps[j].Id
+		})
+	}
+	if direction == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].Id > chirps[j].Id
+		})
+	}
+	return chirps
 }
 
 func (db *DB) GetChirp(id int) (Chirp, error) {
